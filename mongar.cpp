@@ -23,6 +23,10 @@ struct timeval nextReportTV;
 struct timeval intervalTV;
 long int count =0;
 pthread_t thread1;
+int port;
+char* hostname = "192.168.1.2";
+char *stringString = "local.garden.water.counter";
+
 
 void error(char *msg)
 {
@@ -100,9 +104,9 @@ void timeval_add(struct timeval *result,struct timeval *x,struct timeval *y )
 void report(long int cnt, struct timeval *now, struct timeval *interval) {
    char buf[255];
    long ts = time(NULL);
-   sprintf(buf,"local.random2.diceroll %d  %u\n",cnt,ts);   
-   struct hostent *server = gethostbyname("192.168.1.2");
-   send(2003, server, buf);
+   sprintf(buf,"%s  %d %u\n",stringString, cnt,ts);   
+   struct hostent *server = gethostbyname(hostname);
+   send(port, server, buf);
 }
 
 void* reportThreadRun(void *ptr) {
@@ -165,6 +169,35 @@ int main( int argc, char** argv )
 
     intervalTV.tv_sec=60;
     intervalTV.tv_usec =0;
+
+    char *portString = "2003";
+    char *intervalString = "60";
+    int opt;
+
+    while ((opt = getopt(argc, argv, "p:h:s:i:")) != -1) {
+        switch (opt) {
+        case 'p':
+            portString = optarg; 
+            break;
+        case 'h':
+            hostname = optarg;
+            break;
+        case 's':
+            stringString = optarg;
+            break;
+        case 'i':
+            intervalString = optarg;
+            break;
+        default:
+            fprintf(stderr, "Usage: %s \n", argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
+    port = atoi(portString);
+    intervalTV.tv_sec = atoi(intervalString);
+
+    cout << " will send data to " << hostname << ":" << port << " to key " << stringString << " at interval " << intervalTV.tv_sec << " seconds " << endl;
+
     gettimeofday(&startTV,NULL);    
     nextReportTV.tv_sec =0;;    
     int fd = open( "/sys/class/gpio/gpio30/value", O_RDONLY | O_NONBLOCK );

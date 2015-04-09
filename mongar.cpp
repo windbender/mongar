@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <pthread.h>
 
 using namespace std;
 
@@ -21,6 +22,7 @@ struct timeval startTV;
 struct timeval nextReportTV;
 struct timeval intervalTV;
 long int count =0;
+pthread_t thread1;
 
 void error(char *msg)
 {
@@ -103,6 +105,34 @@ void report(long int cnt, struct timeval *now, struct timeval *interval) {
    send(2003, server, buf);
 }
 
+void* reportThreadRun(void *ptr) {
+    
+    while(true) {
+       struct timeval nowTV;
+       gettimeofday(&nowTV,NULL);
+       if(nextReportTV.tv_sec ==0) {
+          // first time out
+          timeval_add(&nextReportTV, &nowTV, &intervalTV);
+          cerr << "first time" << endl;
+       } else {
+          // ok now we have something real.
+          struct timeval deltaTV;
+          int neg = timeval_subtract (&deltaTV,&nextReportTV,&nowTV );
+          cerr << "other times,  neg:" << neg << " deltaTV " << deltaTV.tv_sec << " count: "<< count << endl;
+          if(neg ) {
+             // the future
+             timeval_add(&nextReportTV, &nowTV, &intervalTV);
+             // add the delta which is now negative to get next point
+             timeval_add(&nextReportTV, &nextReportTV, &deltaTV);
+             cerr << "-- report " << endl;
+             report(count,&intervalTV,&nowTV);
+          }
+       }
+       sleep(1);
+       cerr << " and loop" << endl;
+    }
+   
+}
 static gboolean onTransitionEvent( GIOChannel *channel,
                GIOCondition condition,
                gpointer user_data )
@@ -117,26 +147,6 @@ static gboolean onTransitionEvent( GIOChannel *channel,
                                             buf, buf_sz - 1,
                                             &bytes_read,
                                             &error );
-    struct timeval nowTV;
-    gettimeofday(&nowTV,NULL);
-    if(nextReportTV.tv_sec ==0) {
-       // first time out
-       timeval_add(&nextReportTV, &nowTV, &intervalTV);  
-       cerr << "first time";
-    } else {
-       // ok now we have something real.
-       struct timeval deltaTV;
-       int neg = timeval_subtract (&deltaTV,&nextReportTV,&nowTV );
-       cerr << "other times,  neg:" << neg << " deltaTV " << deltaTV.tv_sec << " count: "<< count;
-       if(neg ) {
-          // the future
-          timeval_add(&nextReportTV, &nowTV, &intervalTV);
-          // add the delta which is now negative to get next point
-          timeval_add(&nextReportTV, &nextReportTV, &deltaTV);
-          report(count,&intervalTV,&nowTV);
-
-       }
-    }
     count++;
 
     if(rc == G_IO_STATUS_NORMAL) {
@@ -150,6 +160,7 @@ static gboolean onTransitionEvent( GIOChannel *channel,
 
 int main( int argc, char** argv )
 {
+    int  iret1;
     GMainLoop* loop = g_main_loop_new( 0, 0 );
 
     intervalTV.tv_sec=60;
@@ -160,6 +171,10 @@ int main( int argc, char** argv )
     GIOChannel* channel = g_io_channel_unix_new( fd );
     GIOCondition cond = GIOCondition( G_IO_PRI );
     guint id = g_io_add_watch( channel, cond, onTransitionEvent, 0 );
-   
+  
+
+    iret1 = pthread_create( &thread1, NULL, reportThreadRun, NULL);
+ 
     g_main_loop_run( loop );
+    pthread_join( thread1, NULL);
 }

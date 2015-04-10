@@ -1,0 +1,9 @@
+[Unit]
+Description=This setups up the GPIO so that it can be used from GLIB
+
+[Service]
+User=root
+Type=oneshot
+ExecStart=/home/chris/mongar/setupGPIO.sh 
+
+WantedBy=mongar

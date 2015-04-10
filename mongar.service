@@ -1,0 +1,13 @@
+[Unit]
+Description=This service monitors the garden water usage via hall effect sensor and GPIO counter
+Requires=GPIOSetup
+
+[Service]
+User=chris
+Type=simple
+ExecStart= /home/chris/mongar/mongar -p 2003 -h 192.168.1.2 -s monansrill.garden.waterflow.count -i 60 2>&1
+PIDFile=/var/spool/mongar/master.pid
+
+[Install]
+WantedBy=multi-user.target
+

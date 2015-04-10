@@ -58,6 +58,7 @@ int send(int portno, struct hostent* server, char *msg)
     n = write(sockfd,msg,strlen(msg));
     if (n < 0)
          error("ERROR writing to socket");
+    close(sockfd);
     return 0;
 }
 
@@ -127,7 +128,12 @@ void* reportThreadRun(void *ptr) {
              // the future
              timeval_add(&nextReportTV, &nowTV, &intervalTV);
              // add the delta which is now negative to get next point
-             timeval_add(&nextReportTV, &nextReportTV, &deltaTV);
+             if(deltaTV.tv_sec > -60 ) {
+                timeval_add(&nextReportTV, &nextReportTV, &deltaTV);
+             } else {
+                // this means either we really lamed out on response time, or the time actually changed.
+                // either way we don't want to add in that negative this 
+             }
              cerr << "-- report " << endl;
              report(count,&intervalTV,&nowTV);
           }

@@ -5,7 +5,13 @@ C/C++ program to run on beaglebone black to count GPIO transitions and report to
 
 This is a GLIB streams based counter which counts transitions on a GPIO line of the beaglebone black.
 
-This code is setup to run on line 30. To enable the transition triggers of the input stream one needs to run the following two lines:
+modern BBB use debian as their install. So I have included to systemd service scripts and a script which sets up the GPIO line. These the two *.service scripts get copied into /etc/system/system  (do this as root ). You should modify BOTH of these to suit your particular setup, the server you are reporting, the GPIO line you are using, and where the setupGPIO.sh script is located.
+
+I need to pull the exact GPIO line out as another CLI param, right now that is hard coded in the mongar.cpp
+
+
+
+if you want to roll your own or manually start up, you need to do something like this to get the IO lines working:
 
 echo 30 >/sys/class/gpio/export
 
@@ -24,6 +30,4 @@ On startup one must specify:
 -s string key to report the count into.
 
 -i interval in seconds to report.  default is 60
-
-As coded now, the once a minute reporting uses the SAME thread as the transition counter. If the process of connecting and reporting the value to graphite takes too long then the thread may be unable to count transitions.  This is a design deficiency.  I would like to change how this operates so that the reporting is done on a second thread.  And ideally there is some sort of mutex between the two threads.
 

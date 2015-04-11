@@ -139,7 +139,7 @@ void* reportThreadRun(void *ptr) {
           }
        }
        sleep(1);
-       cerr << " and loop" << endl;
+       //cerr << " and loop" << endl;
     }
    
 }
@@ -207,13 +207,17 @@ int main( int argc, char** argv )
     gettimeofday(&startTV,NULL);    
     nextReportTV.tv_sec =0;;    
     int fd = open( "/sys/class/gpio/gpio30/value", O_RDONLY | O_NONBLOCK );
+    if(fd < 0) {
+       cerr << "unable to open the GPIO 'file'. Did you set that stuff up proerly ?.  Will now exit ";
+       exit(-1);
+    }
     GIOChannel* channel = g_io_channel_unix_new( fd );
     GIOCondition cond = GIOCondition( G_IO_PRI );
     guint id = g_io_add_watch( channel, cond, onTransitionEvent, 0 );
   
-
+    cerr << "creating thread";
     iret1 = pthread_create( &thread1, NULL, reportThreadRun, NULL);
- 
+    cerr << "thread created"; 
     g_main_loop_run( loop );
     pthread_join( thread1, NULL);
 }

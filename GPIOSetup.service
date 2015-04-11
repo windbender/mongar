@@ -6,4 +6,5 @@ User=root
 Type=oneshot
 ExecStart=/home/chris/mongar/setupGPIO.sh 
 
-WantedBy=mongar
+[Install]
+WantedBy=mongar.service

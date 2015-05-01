@@ -53,12 +53,14 @@ int send(int portno, struct hostent* server, char *msg)
          (char *)&serv_addr.sin_addr.s_addr,
          server->h_length);
     serv_addr.sin_port = htons(portno);
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
-        error("ERROR connecting");
-    n = write(sockfd,msg,strlen(msg));
-    if (n < 0)
-         error("ERROR writing to socket");
-    close(sockfd);
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) {
+        perror("ERROR connecting");
+    } else {
+       n = write(sockfd,msg,strlen(msg));
+       if (n < 0)
+           perror("ERROR writing to socket");
+       close(sockfd);
+    }
     return 0;
 }
 
@@ -160,7 +162,7 @@ static gboolean onTransitionEvent( GIOChannel *channel,
     count++;
 
     if(rc == G_IO_STATUS_NORMAL) {
-        cerr << "  data:" << buf << endl;
+        //cerr << "  data:" << buf << endl;
     } else {
         cerr << "something was wrong, rc = " << rc << endl;
     }    

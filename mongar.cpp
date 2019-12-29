@@ -14,19 +14,22 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <pthread.h>
 
 using namespace std;
 
-struct timeval startTV;
-struct timeval nextReportTV;
-struct timeval intervalTV;
-long int count =0;
-pthread_t thread1;
+#define MAX_BUF 64     //This is plenty large
+
 int port;
 char* hostname = "192.168.1.2";
 char *stringString = "local.garden.water.counter";
 
+
+struct CountUp {
+    string gpio;
+    long int count;
+    string reportingString;
+    guint id;
+};
 
 void error(char *msg)
 {
@@ -53,98 +56,54 @@ int send(int portno, struct hostent* server, char *msg)
          (char *)&serv_addr.sin_addr.s_addr,
          server->h_length);
     serv_addr.sin_port = htons(portno);
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) {
-        perror("ERROR connecting");
-    } else {
-       n = write(sockfd,msg,strlen(msg));
-       if (n < 0)
-           perror("ERROR writing to socket");
-       close(sockfd);
-    }
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
+        error("ERROR connecting");
+    n = write(sockfd,msg,strlen(msg));
+    if (n < 0)
+         error("ERROR writing to socket");
     return 0;
 }
-
-int timeval_subtract (struct timeval *result,struct timeval *x,struct timeval *y )
+//Function definitions
+int readADC(unsigned int pin)
 {
-  // Perform the carry for the later subtraction by updating y. 
-  if (x->tv_usec < y->tv_usec) {
-    int nsec = (y->tv_usec - x->tv_usec) / 1000000 + 1;
-    y->tv_usec -= 1000000 * nsec;
-    y->tv_sec += nsec;
-  }
-  if (x->tv_usec - y->tv_usec > 1000000) {
-    int nsec = (x->tv_usec - y->tv_usec) / 1000000;
-    y->tv_usec += 1000000 * nsec;
-    y->tv_sec -= nsec;
-  }
+    int fd;          //file pointer
+    char buf[MAX_BUF];     //file buffer
+    char val[4];     //holds up to 4 digits for ADC value
 
-  // Compute the time remaining to wait.  tv_usec is certainly positive. 
-  result->tv_sec = x->tv_sec - y->tv_sec;
-  result->tv_usec = x->tv_usec - y->tv_usec;
+    //Create the file path by concatenating the ADC pin number to the end of the string
+    //Stores the file path name string into "buf"
+    snprintf(buf, sizeof(buf), "/sys/devices/ocp.2/helper.14/AIN%d", pin);     //Concatenate ADC file name
 
-  // Return 1 if result is negative. 
-  return x->tv_sec < y->tv_sec;
-}
+    fd = open(buf, O_RDONLY);     //open ADC as read only
 
-void timeval_add(struct timeval *result,struct timeval *x,struct timeval *y )
-{
-  long int sec =0;
-  long int usec_sum = x->tv_usec + y->tv_usec;
-  
-  while(usec_sum > 1000000 ) {
-     usec_sum = usec_sum - 1000000;
-     sec = sec + 1;
-  }
+    //Will trigger if the ADC is not enabled
+    if (fd < 0) {
+        perror("ADC - problem opening ADC");
+    }//end if
 
-  sec = y->tv_sec + x->tv_sec + sec;
+    read(fd, &val, 4);     //read ADC ing val (up to 4 digits 0-1799)
+    close(fd);     //close file and stop reading
 
-  // Compute the time remaining to wait.  tv_usec is certainly positive.
-  result->tv_sec = sec;
-  result->tv_usec = usec_sum;;
+    return atoi(val);     //returns an integer value (rather than ascii)
+}//end read ADC()
 
-}
+static gboolean sendTimerCallback (gpointer user_data) {
+    CountUp* countups = (CountUp*)user_data;
+    int lenArr = sizeof(countups)/sizeof(countups[0]);
+    for(int i=0; i < lenArr; i++) {
+        long int cnt = countups[i].count;
+        string reportString = countups[i].reportingString;
 
-void report(long int cnt, struct timeval *now, struct timeval *interval) {
-   char buf[255];
-   long ts = time(NULL);
-   sprintf(buf,"%s  %d %u\n",stringString, cnt,ts);   
-   struct hostent *server = gethostbyname(hostname);
-   send(port, server, buf);
-}
-
-void* reportThreadRun(void *ptr) {
-    
-    while(true) {
-       struct timeval nowTV;
-       gettimeofday(&nowTV,NULL);
-       if(nextReportTV.tv_sec ==0) {
-          // first time out
-          timeval_add(&nextReportTV, &nowTV, &intervalTV);
-          cerr << "first time" << endl;
-       } else {
-          // ok now we have something real.
-          struct timeval deltaTV;
-          int neg = timeval_subtract (&deltaTV,&nextReportTV,&nowTV );
-          cerr << "other times,  neg:" << neg << " deltaTV " << deltaTV.tv_sec << " count: "<< count << endl;
-          if(neg ) {
-             // the future
-             timeval_add(&nextReportTV, &nowTV, &intervalTV);
-             // add the delta which is now negative to get next point
-             if(deltaTV.tv_sec > -60 ) {
-                timeval_add(&nextReportTV, &nextReportTV, &deltaTV);
-             } else {
-                // this means either we really lamed out on response time, or the time actually changed.
-                // either way we don't want to add in that negative this 
-             }
-             cerr << "-- report " << endl;
-             report(count,&intervalTV,&nowTV);
-          }
-       }
-       sleep(1);
-       //cerr << " and loop" << endl;
+        char buf[255];
+        long ts = time(NULL);
+        sprintf(buf,"%s %d  %u\n",reportString.c_str(),cnt,ts);
+        struct hostent *server = gethostbyname("192.168.1.2");
+        send(2003, server, buf);
     }
-   
+
+    return 1;
 }
+
 static gboolean onTransitionEvent( GIOChannel *channel,
                GIOCondition condition,
                gpointer user_data )
@@ -153,73 +112,76 @@ static gboolean onTransitionEvent( GIOChannel *channel,
     gsize bytes_read = 0;
     int buf_sz = 255;
     char buf[buf_sz];
+    CountUp* pCountUpStruct = (CountUp*) user_data;
     
     g_io_channel_seek_position( channel, 0, G_SEEK_SET, 0 );
     GIOStatus rc = g_io_channel_read_chars( channel,
                                             buf, buf_sz - 1,
                                             &bytes_read,
                                             &error );
-    count++;
-
     if(rc == G_IO_STATUS_NORMAL) {
-        //cerr << "  data:" << buf << endl;
+        cerr << "  data:" << buf << endl;
     } else {
         cerr << "something was wrong, rc = " << rc << endl;
-    }    
+    }
+    pCountUpStruct->count++;
+
     // thank you, call again!
     return 1;
 }
 
+
 int main( int argc, char** argv )
 {
-    int  iret1;
-    GMainLoop* loop = g_main_loop_new( 0, 0 );
-
-    intervalTV.tv_sec=60;
-    intervalTV.tv_usec =0;
 
     char *portString = "2003";
     char *intervalString = "60";
-    int opt;
+    char *hostname = "192.168.1.2";
+    char *intervalString = "120";
 
+    int opt;
     while ((opt = getopt(argc, argv, "p:h:s:i:")) != -1) {
         switch (opt) {
-        case 'p':
-            portString = optarg; 
-            break;
-        case 'h':
-            hostname = optarg;
-            break;
-        case 's':
-            stringString = optarg;
-            break;
-        case 'i':
-            intervalString = optarg;
-            break;
-        default:
-            fprintf(stderr, "Usage: %s \n", argv[0]);
-            exit(EXIT_FAILURE);
+            case 'p':
+                portString = optarg;
+                break;
+            case 'h':
+                hostname = optarg;
+                break;
+            case 's':
+                stringString = optarg;
+                break;
+            case 'i':
+                intervalString = optarg;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s \n", argv[0]);
+                exit(EXIT_FAILURE);
         }
     }
     port = atoi(portString);
-    intervalTV.tv_sec = atoi(intervalString);
+    interval = atoi(intervalString);
 
-    cout << " will send data to " << hostname << ":" << port << " to key " << stringString << " at interval " << intervalTV.tv_sec << " seconds " << endl;
+    CountUp countups[]={
+            {  "gpio30", 0, "waterCount" },
+            {  "James", 0, "waterCount"  },
+            { "John", 0, "waterCount"  },
+            { "Mike", 0, "waterCount"  }
+    };
 
-    gettimeofday(&startTV,NULL);    
-    nextReportTV.tv_sec =0;;    
-    int fd = open( "/sys/class/gpio/gpio30/value", O_RDONLY | O_NONBLOCK );
-    if(fd < 0) {
-       cerr << "unable to open the GPIO 'file'. Did you set that stuff up proerly ?.  Will now exit ";
-       exit(-1);
+    GMainLoop* loop = g_main_loop_new( 0, 0 );
+
+
+    int lenArr = sizeof(countups)/sizeof(countups[0]);
+    for(int i=0; i < lenArr; i++) {
+        string gpioDesc = "/sys/class/gpio/"+countups[i].gpio+"/value";
+        int fd = open( gpioDesc.c_str(), O_RDONLY | O_NONBLOCK );
+        GIOChannel* channel = g_io_channel_unix_new( fd );
+        GIOCondition cond = GIOCondition( G_IO_PRI );
+        guint id = g_io_add_watch( channel, cond, onTransitionEvent, &(countups[i]) );
     }
-    GIOChannel* channel = g_io_channel_unix_new( fd );
-    GIOCondition cond = GIOCondition( G_IO_PRI );
-    guint id = g_io_add_watch( channel, cond, onTransitionEvent, 0 );
-  
-    cerr << "creating thread";
-    iret1 = pthread_create( &thread1, NULL, reportThreadRun, NULL);
-    cerr << "thread created"; 
+
+    guint sendIntervalSecs = 60 *2;
+    g_timeout_add_seconds(sendIntervalSecs,sendTimerCallback,countups);
     g_main_loop_run( loop );
-    pthread_join( thread1, NULL);
 }

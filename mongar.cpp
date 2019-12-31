@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <sys/time.h>
 #include <glib.h>
 #include <iostream>
@@ -20,9 +21,10 @@ using namespace std;
 #define MAX_BUF 64     //This is plenty large
 
 int port;
-char* hostname = "192.168.1.2";
-char *stringString = "local.garden.water.counter";
+char* hostname = (char*) "192.168.1.2";
+char *stringString = (char*) "local.garden.water.counter";
 
+char* windDirString = (char*) "/sys/bus/iio/devices/iio:device0/in_voltage0_raw";
 
 struct CountUp {
     string gpio;
@@ -31,11 +33,13 @@ struct CountUp {
     guint id;
 };
 
-void error(char *msg)
-{
+void error(const char *msg) {
     perror(msg);
     exit(0);
 }
+
+int lenArr = 0;
+
 
 int send(int portno, struct hostent* server, char *msg)
 {
@@ -61,24 +65,20 @@ int send(int portno, struct hostent* server, char *msg)
     n = write(sockfd,msg,strlen(msg));
     if (n < 0)
          error("ERROR writing to socket");
+    close(sockfd);
     return 0;
 }
 //Function definitions
-int readADC(unsigned int pin)
+int readADC(char* windFile)
 {
     int fd;          //file pointer
-    char buf[MAX_BUF];     //file buffer
     char val[4];     //holds up to 4 digits for ADC value
 
-    //Create the file path by concatenating the ADC pin number to the end of the string
-    //Stores the file path name string into "buf"
-    snprintf(buf, sizeof(buf), "/sys/devices/ocp.2/helper.14/AIN%d", pin);     //Concatenate ADC file name
-
-    fd = open(buf, O_RDONLY);     //open ADC as read only
+    fd = open(windFile, O_RDONLY);     //open ADC as read only
 
     //Will trigger if the ADC is not enabled
     if (fd < 0) {
-        perror("ADC - problem opening ADC");
+        error("ADC - problem opening ADC");
     }//end if
 
     read(fd, &val, 4);     //read ADC ing val (up to 4 digits 0-1799)
@@ -87,9 +87,58 @@ int readADC(unsigned int pin)
     return atoi(val);     //returns an integer value (rather than ascii)
 }//end read ADC()
 
+static float makeDegreeFromReading(float reading) {
+   struct WindDir {
+      float start;
+      float end;
+      float degree;
+   };
+
+   WindDir winddir[]  = {
+      {0,27.5,112.5},
+      {27.5,33,67.5},
+      {33,42,90},
+      {42,63,157.5},
+      {63,93,135},
+      {93,122,202.5},
+      {122,180,180},
+      {180,251.5,22.5},
+      {251.5,372.5,45},
+      {372.5,496,247.5},
+      {496,612.5,225},
+      {612.5,853.5,337.5},
+      {853.5,1123.5,0},
+      {1123.5,1497,292.5},
+      {1497,2230,315},
+      {2230,4096,270}
+   };
+   int lenArr2 = sizeof(winddir)/sizeof(winddir[0]);
+   for(int i =0; i < lenArr2; i++) {
+      if(winddir[i].start <= reading && winddir[i].end > reading ) {
+         return winddir[i].degree;
+      } else {
+      }
+   }
+   return -1;
+}
+
+float currentDir = 0;
+static gboolean readWindDir(gpointer user_data) {
+   int val = readADC(windDirString);
+   float dir = makeDegreeFromReading(1.0* val);   
+   float ratio = 0.01;
+   currentDir = currentDir * ( 1 - ratio) + ratio * dir; 
+   return 1; 
+}
+
+static gboolean printWindDir(gpointer user_data) {
+
+   cerr << "wind reading :" << currentDir << endl;
+   return 1;
+}
+
 static gboolean sendTimerCallback (gpointer user_data) {
     CountUp* countups = (CountUp*)user_data;
-    int lenArr = sizeof(countups)/sizeof(countups[0]);
     for(int i=0; i < lenArr; i++) {
         long int cnt = countups[i].count;
         string reportString = countups[i].reportingString;
@@ -97,10 +146,21 @@ static gboolean sendTimerCallback (gpointer user_data) {
         char buf[255];
         long ts = time(NULL);
         sprintf(buf,"%s %d  %u\n",reportString.c_str(),cnt,ts);
+
+//        cerr << "  send: " << buf << endl;
+
         struct hostent *server = gethostbyname("192.168.1.2");
         send(2003, server, buf);
     }
+    {
 
+        char buf[255];
+        long ts = time(NULL);
+        sprintf(buf,"%s %f %u\n","winddir",currentDir,ts);
+
+        struct hostent *server = gethostbyname("192.168.1.2");
+        send(2003, server, buf);
+    }
     return 1;
 }
 
@@ -120,7 +180,7 @@ static gboolean onTransitionEvent( GIOChannel *channel,
                                             &bytes_read,
                                             &error );
     if(rc == G_IO_STATUS_NORMAL) {
-        cerr << "  data:" << buf << endl;
+        cerr << "  data: " << pCountUpStruct->reportingString << ": "<< pCountUpStruct->count << endl;
     } else {
         cerr << "something was wrong, rc = " << rc << endl;
     }
@@ -130,14 +190,26 @@ static gboolean onTransitionEvent( GIOChannel *channel,
     return 1;
 }
 
+int enableTransitions(string gpio,const char* val) {
+    string gpioProg = "/sys/class/gpio/"+gpio+"/edge";
+
+    FILE* f = fopen(gpioProg.c_str(), "w");
+    if (f == NULL) {
+        fprintf(stderr, "Unable to open path for writing\n");
+        return 1;
+    }
+
+    fprintf(f, "%s\n",val);
+    fclose(f);
+    return 0;
+}
 
 int main( int argc, char** argv )
 {
 
-    char *portString = "2003";
-    char *intervalString = "60";
-    char *hostname = "192.168.1.2";
-    char *intervalString = "120";
+    char *portString = (char*)"2003";
+    char *intervalString = (char*)"60";
+    char *hostname = (char*)"192.168.1.2";
 
     int opt;
     while ((opt = getopt(argc, argv, "p:h:s:i:")) != -1) {
@@ -160,19 +232,24 @@ int main( int argc, char** argv )
         }
     }
     port = atoi(portString);
-    interval = atoi(intervalString);
+    int interval = atoi(intervalString);
 
     CountUp countups[]={
-            {  "gpio30", 0, "waterCount" },
-            {  "James", 0, "waterCount"  },
-            { "John", 0, "waterCount"  },
-            { "Mike", 0, "waterCount"  }
+            { "gpio30", 0, "waterCount" },
+            { "gpio31", 0, "rainCount"  },
+            { "gpio20", 0, "windCount"  }
     };
 
     GMainLoop* loop = g_main_loop_new( 0, 0 );
+    
+    lenArr = sizeof(countups)/sizeof(countups[0]);
+    for(int i=0; i < lenArr; i++) {
+        int x = enableTransitions(countups[i].gpio,"both");
+        if(x != 0) {
+           error("unable to setup transitions");
+        }
+    } 
 
-
-    int lenArr = sizeof(countups)/sizeof(countups[0]);
     for(int i=0; i < lenArr; i++) {
         string gpioDesc = "/sys/class/gpio/"+countups[i].gpio+"/value";
         int fd = open( gpioDesc.c_str(), O_RDONLY | O_NONBLOCK );
@@ -181,7 +258,10 @@ int main( int argc, char** argv )
         guint id = g_io_add_watch( channel, cond, onTransitionEvent, &(countups[i]) );
     }
 
-    guint sendIntervalSecs = 60 *2;
-    g_timeout_add_seconds(sendIntervalSecs,sendTimerCallback,countups);
+
+    guint sendIntervalSecs = 60;
+    //guint sendIntervalSecs = 4;
+    g_timeout_add_seconds_full(G_PRIORITY_DEFAULT_IDLE,sendIntervalSecs,sendTimerCallback,countups,NULL); // G_PRIORITY_DEFAULT_IDLE
+    g_timeout_add(10,readWindDir,countups);
     g_main_loop_run( loop );
 }
